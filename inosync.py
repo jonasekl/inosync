@@ -31,7 +31,12 @@ OPTION_LIST = [
       "-v", dest = "verbose",
       action = "store_true",
       default = False,
-      help = "print debugging information"),
+    ),
+  make_option(
+      "-s", dest = "singlefile",
+      action = "store_true",
+      default = False,
+      help = "rsync single file"),
 ]
 
 DEFAULT_EVENTS = [
@@ -45,8 +50,10 @@ DEFAULT_EVENTS = [
 class RsyncEvent(ProcessEvent):
   pretend = None
 
-  def __init__(self, pretend=False):
+  def __init__(self, pretend=False, singlefile=False):
     self.pretend = pretend
+    self.singlefile = singlefile
+    syslog('Starting RsyncEvent. singlefile:%s' % self.singlefile)
 
   def sync(self):
     args = [config.rsync, "-ltrp", "--delete"]
@@ -65,15 +72,64 @@ class RsyncEvent(ProcessEvent):
       if self.pretend:
         syslog("would execute `%s'" % (cmd % node))
       else:
+        if self.singlefile:
+          syslog('singlefile %s' % cmd)
+        else:
+          syslog(LOG_DEBUG, "executing %s" % (cmd % node))
+          proc = os.popen(cmd % node)
+          for line in proc:
+            syslog(LOG_DEBUG, "[rsync] %s" % line.strip())
+
+  def sync_single_file(self, file):
+    syslog('sync_single_file:%s' % file)
+    args = [config.rsync, "-ltrp"]
+    if config.logfile:
+      args.append("--log-file=%s" % config.logfile)
+#    args.append(config.wpath)
+    args.append(file)
+    args.append('%s'+file)
+    cmd = " ".join(args)
+    for node in config.rnodes:
+      if self.pretend:
+        syslog('would execute %s' % (cmd % node))
+      else:
+          syslog(LOG_DEBUG, "executing %s" % (cmd % node))
+          proc = os.popen(cmd % node)
+          for line in proc:
+            syslog(LOG_DEBUG, "[rsync] %s" % line.strip())
+
+  def sync_parent_dir(self, path):
+    '''This method takes the path to a file and does an rsync on the parent dir. The purpose
+          for this is simply to apply deletions'''
+    syslog(LOG_DEBUG, 'sync_parent_dir for path %s' % path)
+    _sync_path = path[0:path.rfind('/')+1]
+    cmd = 'rsync -avz --delete %s %%s%s' % (_sync_path, _sync_path )
+
+    for node in config.rnodes:
+      if self.pretend:
+        syslog(LOG_DEBUG , 'would execute %s ' % (cmd % node))
+      else:
         syslog(LOG_DEBUG, "executing %s" % (cmd % node))
         proc = os.popen(cmd % node)
         for line in proc:
           syslog(LOG_DEBUG, "[rsync] %s" % line.strip())
 
+
+
+
+
   def process_default(self, event):
     syslog(LOG_DEBUG, "caught %s on %s" % \
         (event.maskname, os.path.join(event.path, event.name)))
-    self.sync()
+    if self.singlefile:
+      if event.maskname == str('IN_CLOSE_WRITE'):
+        self.sync_single_file(os.path.join(event.path, event.name))
+      elif event.maskname == str('IN_DELETE'):
+        self.sync_parent_dir(os.path.join(event.path, event.name))
+      else:
+        syslog('Ignored event %s' % event.maskname)
+    else:
+      self.sync()
 
 def daemonize():
   try:
@@ -177,7 +233,7 @@ def main():
     daemonize()
 
   wm = WatchManager()
-  ev = RsyncEvent(options.pretend)
+  ev = RsyncEvent(options.pretend, options.singlefile)
   notifier = AsyncNotifier(wm, ev, read_freq=config.edelay)
   mask = reduce(lambda x,y: x|y, [EventsCodes.ALL_FLAGS[e] for e in config.emask])
   wds = wm.add_watch(config.wpath, mask, rec=True, auto_add=True)
