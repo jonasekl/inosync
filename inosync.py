@@ -238,9 +238,10 @@ def main():
   mask = reduce(lambda x,y: x|y, [EventsCodes.ALL_FLAGS[e] for e in config.emask])
   wds = wm.add_watch(config.wpath, mask, rec=True, auto_add=True)
 
-  syslog(LOG_DEBUG, "starting initial synchronization on %s" % config.wpath)
-  ev.sync()
-  syslog(LOG_DEBUG, "initial synchronization on %s done" % config.wpath)
+  if not options.singlefile:
+    syslog(LOG_DEBUG, "starting initial synchronization on %s" % config.wpath)
+    ev.sync()
+    syslog(LOG_DEBUG, "initial synchronization on %s done" % config.wpath)
 
   syslog("resuming normal operations on %s" % config.wpath)
   asyncore.loop()
